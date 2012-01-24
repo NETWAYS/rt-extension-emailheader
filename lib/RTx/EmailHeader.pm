@@ -5,11 +5,32 @@ use version "1.0";
 use Hook::LexWrap;
 use RT::Interface::Email;
 
+sub rewriteString {
+	my $string = shift;
+	my $ticket = shift;
+	my $transaction = shift;
+	
+	return $string unless (ref($ticket) eq 'RT::Ticket');
+	return $string unless (ref($transaction) eq 'RT::Transaction');
+	
+	$string =~ s/__Ticket__/$ticket->Id/ge;
+	$string =~ s/__Ticket\(([^\)]+)\)__/$ticket->$1/ge;
+	
+	$string =~ s/__Transaction__/$transaction->Id/ge;
+	$string =~ s/__Transaction\(([^\)]+)\)__/$transaction->$1/ge;
+	
+	return $string;
+}
 
 wrap *RT::Interface::Email::SendEmail,
 	'pre' => sub {
-		RT->Logger->error("LAOLA");
-		my @a = splice(@_, 0);
+		
+		my $length = scalar(@_);
+		
+		$length-- if ($length %2 ne 0);
+		
+		my @a = splice(@_, 0, $length);
+		
 		my (%args) = (
 	        Entity => undef,
 	        Bounce => 0,
@@ -22,11 +43,7 @@ wrap *RT::Interface::Email::SendEmail,
 			my $header = RT->Config->Get('RTx_EmailHeader_AdditionalHeaders') || {};
 			while(my($header,$value) = each(%{ $header })) {
 				
-				$value =~ s/__Ticket__/$args{'Ticket'}->Id/ge;
-				$value =~ s/__Ticket\(([^\)]+)\)__/$args{'Ticket'}->$1/ge;
-				
-				$value =~ s/__Transaction__/$args{'Transaction'}->Id/ge;
-				$value =~ s/__Transaction\(([^\)]+)\)__/$args{'Transaction'}->$1/ge;
+				$value = rewriteString($value, $args{'Ticket'}, $args{'Transaction'});
 				
 				RT->Logger->info("Adding header: $header: $value");
 				
