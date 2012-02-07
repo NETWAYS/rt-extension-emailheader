@@ -6,20 +6,27 @@ use Hook::LexWrap;
 use RT::Interface::Email;
 
 sub rewriteString {
-	my $string = shift;
-	my $ticket = shift;
-	my $transaction = shift;
-	
-	return $string unless (ref($ticket) eq 'RT::Ticket');
-	return $string unless (ref($transaction) eq 'RT::Transaction');
-	
-	$string =~ s/__Ticket__/$ticket->Id/ge;
-	$string =~ s/__Ticket\(([^\)]+)\)__/$ticket->$1/ge;
-	
-	$string =~ s/__Transaction__/$transaction->Id/ge;
-	$string =~ s/__Transaction\(([^\)]+)\)__/$transaction->$1/ge;
-	
-	return $string;
+        my $string = shift;
+        my $ticket = shift;
+        my $transaction = shift;
+        
+        if (ref($ticket) eq 'RT::Ticket') {
+                $string =~ s/__Ticket__/$ticket->Id/ge;
+                $string =~ s/__Ticket\(([^\)]+)\)__/$ticket->$1/ge;
+        } else {
+                $string =~ s/__Ticket__/0/g;
+                $string =~ s/__Ticket\(([^\)]+)\)__/0/g;
+        }
+
+        if (ref($transaction) eq 'RT::Transaction') {   
+                $string =~ s/__Transaction__/$transaction->Id/ge;
+                $string =~ s/__Transaction\(([^\)]+)\)__/$transaction->$1/ge;
+        } else {
+                $string =~ s/__Transaction__/0/g;
+                $string =~ s/__Transaction\(([^\)]+)\)__/0/g;
+        }
+        
+        return $string;
 }
 
 wrap *RT::Interface::Email::SendEmail,
