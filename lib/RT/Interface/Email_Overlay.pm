@@ -2,6 +2,8 @@ use strict;
 no warnings qw(redefine);
 package RT::Interface::Email;
 
+our $logfile;
+
 sub SendEmail {
     my (%args) = (
         Entity => undef,
@@ -14,19 +16,12 @@ sub SendEmail {
     my $TicketObj = $args{'Ticket'};
     my $TransactionObj = $args{'Transaction'};
 
-    foreach my $arg( qw(Entity Bounce) ) {
-        next unless defined $args{ lc $arg };
-
-        $RT::Logger->warning("'". lc($arg) ."' argument is deprecated, use '$arg' instead");
-        $args{ $arg } = delete $args{ lc $arg };
-    }
-
     unless ( $args{'Entity'} ) {
         $RT::Logger->crit( "Could not send mail without 'Entity' object" );
         return 0;
     }
 
-    my $msgid = $args{'Entity'}->head->get('Message-ID') || '';
+    my $msgid = Encode::decode( "UTF-8", $args{'Entity'}->head->get('Message-ID') || '' );
     chomp $msgid;
     
     # If we don't have any recipients to send to, don't send a message;
@@ -43,54 +38,52 @@ sub SendEmail {
         return -1;
     }
 
+    if (my $precedence = RT->Config->Get('DefaultMailPrecedence')
+        and !$args{'Entity'}->head->get("Precedence")
+    ) {
+        $args{'Entity'}->head->replace( 'Precedence', Encode::encode("UTF-8",$precedence) );
+    }
+
     if ( $TransactionObj && !$TicketObj
         && $TransactionObj->ObjectType eq 'RT::Ticket' )
     {
         $TicketObj = $TransactionObj->Object;
     }
 
-    if ( RT->Config->Get('GnuPG')->{'Enable'} ) {
-        my %crypt;
-
-        my $attachment;
-        $attachment = $TransactionObj->Attachments->First
-            if $TransactionObj;
-
-        foreach my $argument ( qw(Sign Encrypt) ) {
-            next if defined $args{ $argument };
-
-            if ( $attachment && defined $attachment->GetHeader("X-RT-$argument") ) {
-                $crypt{$argument} = $attachment->GetHeader("X-RT-$argument");
-            } elsif ( $TicketObj ) {
-                $crypt{$argument} = $TicketObj->QueueObj->$argument();
-            }
-        }
-
-        my $res = SignEncrypt( %args, %crypt );
-        return $res unless $res > 0;
-    }
-
-    unless ( $args{'Entity'}->head->get('Date') ) {
+    my $head = $args{'Entity'}->head;
+    unless ( $head->get('Date') ) {
         require RT::Date;
         my $date = RT::Date->new( RT->SystemUser );
         $date->SetToNow;
-        $args{'Entity'}->head->set( 'Date', $date->RFC2822( Timezone => 'server' ) );
+        $head->replace( 'Date', Encode::encode("UTF-8",$date->RFC2822( Timezone => 'server' ) ) );
+    }
+    unless ( $head->get('MIME-Version') ) {
+        # We should never have to set the MIME-Version header
+        $head->replace( 'MIME-Version', '1.0' );
+    }
+    unless ( $head->get('Content-Transfer-Encoding') ) {
+        # fsck.com #5959: Since RT sends 8bit mail, we should say so.
+        $head->replace( 'Content-Transfer-Encoding', '8bit' );
+    }
+
+    if ( RT->Config->Get('Crypt')->{'Enable'} ) {
+        %args = WillSignEncrypt(
+            %args,
+            Attachment => $TransactionObj ? $TransactionObj->Attachments->First : undef,
+            Ticket     => $TicketObj,
+        );
+        my $res = SignEncrypt( %args );
+        return $res unless $res > 0;
     }
 
     my $mail_command = RT->Config->Get('MailCommand');
-    
-	# RTx::EmailHeader MOD
-	my $sendmailAdd = undef;
+
+    # RTx::EmailHeader MOD
+    my $sendmailAdd = undef;
     if (RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs')) {
-    	$sendmailAdd = RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs');
+        $sendmailAdd = RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs');
         $sendmailAdd = RTx::EmailHeader::rewriteString($sendmailAdd, $TicketObj, $TransactionObj);
         RT->Logger->info("Adding custom sendmail args: $sendmailAdd");
-	}
-    
-
-    if ($mail_command eq 'testfile' and not $Mail::Mailer::testfile::config{outfile}) {
-        $Mail::Mailer::testfile::config{outfile} = File::Temp->new;
-        $RT::Logger->info("Storing outgoing emails in $Mail::Mailer::testfile::config{outfile}");
     }
 
     # if it is a sub routine, we just return it;
@@ -98,31 +91,36 @@ sub SendEmail {
 
     if ( $mail_command eq 'sendmailpipe' ) {
         my $path = RT->Config->Get('SendmailPath');
-        my $args = RT->Config->Get('SendmailArguments');
+        my @args = shellwords(RT->Config->Get('SendmailArguments'));
+        push @args, "-t" unless grep {$_ eq "-t"} @args;
+        push @args, $sendmailAdd if ($sendmailAdd);
 
-        # SetOutgoingMailFrom
-        if ( RT->Config->Get('SetOutgoingMailFrom') ) {
-            my $OutgoingMailAddress;
+        # SetOutgoingMailFrom and bounces conflict, since they both want -f
+        if ( $args{'Bounce'} ) {
+            push @args, shellwords(RT->Config->Get('SendmailBounceArguments'));
+        } elsif ( my $MailFrom = RT->Config->Get('SetOutgoingMailFrom') ) {
+            my $OutgoingMailAddress = $MailFrom =~ /\@/ ? $MailFrom : undef;
+            my $Overrides = RT->Config->Get('OverrideOutgoingMailFrom') || {};
 
             if ($TicketObj) {
-                my $QueueName = $TicketObj->QueueObj->Name;
-                my $QueueAddressOverride = RT->Config->Get('OverrideOutgoingMailFrom')->{$QueueName};
+                my $Queue = $TicketObj->QueueObj;
+                my $QueueAddressOverride = $Overrides->{$Queue->id}
+                    || $Overrides->{$Queue->Name};
 
                 if ($QueueAddressOverride) {
                     $OutgoingMailAddress = $QueueAddressOverride;
                 } else {
-                    $OutgoingMailAddress = $TicketObj->QueueObj->CorrespondAddress;
+                    $OutgoingMailAddress ||= $Queue->CorrespondAddress
+                        || RT->Config->Get('CorrespondAddress');
                 }
             }
+            elsif ($Overrides->{'Default'}) {
+                $OutgoingMailAddress = $Overrides->{'Default'};
+            }
 
-            $OutgoingMailAddress ||= RT->Config->Get('OverrideOutgoingMailFrom')->{'Default'};
-
-            $args .= " -f $OutgoingMailAddress"
-                if $OutgoingMailAddress;            
+            push @args, "-f", $OutgoingMailAddress
+                if $OutgoingMailAddress;
         }
-
-        # Set Bounce Arguments
-        $args .= ' '. RT->Config->Get('SendmailBounceArguments') if $args{'Bounce'};
 
         # VERP
         if ( $TransactionObj and
@@ -132,94 +130,77 @@ sub SendEmail {
             my $from = $TransactionObj->CreatorObj->EmailAddress;
             $from =~ s/@/=/g;
             $from =~ s/\s//g;
-            $args .= " -f $prefix$from\@$domain";
+            push @args, "-f", "$prefix$from\@$domain";
         }
-        
-        $args .= " $sendmailAdd" if ($sendmailAdd);
 
         eval {
             # don't ignore CHLD signal to get proper exit code
             local $SIG{'CHLD'} = 'DEFAULT';
 
-            open( my $mail, '|-', "$path $args >/dev/null" )
-                or die "couldn't execute program: $!";
-
             # if something wrong with $mail->print we will get PIPE signal, handle it
             local $SIG{'PIPE'} = sub { die "program unexpectedly closed pipe" };
-            $args{'Entity'}->print($mail);
 
-            unless ( close $mail ) {
-                die "close pipe failed: $!" if $!; # system error
+            require IPC::Open2;
+            my ($mail, $stdout);
+            my $pid = IPC::Open2::open2( $stdout, $mail, $path, @args )
+                or die "couldn't execute program: $!";
+
+            $args{'Entity'}->print($mail);
+            close $mail or die "close pipe failed: $!";
+
+            waitpid($pid, 0);
+            if ($?) {
                 # sendmail exit statuses mostly errors with data not software
                 # TODO: status parsing: core dump, exit on signal or EX_*
-                my $msg = "$msgid: `$path $args` exitted with code ". ($?>>8);
+                my $msg = "$msgid: `$path @args` exited with code ". ($?>>8);
                 $msg = ", interrupted by signal ". ($?&127) if $?&127;
                 $RT::Logger->error( $msg );
                 die $msg;
             }
         };
         if ( $@ ) {
-            $RT::Logger->crit( "$msgid: Could not send mail with command `$path $args`: " . $@ );
+            $RT::Logger->crit( "$msgid: Could not send mail with command `$path @args`: " . $@ );
             if ( $TicketObj ) {
                 _RecordSendEmailFailure( $TicketObj );
             }
             return 0;
         }
-    }
-    elsif ( $mail_command eq 'smtp' ) {
-        require Net::SMTP;
-        my $smtp = do { local $@; eval { Net::SMTP->new(
-            Host  => RT->Config->Get('SMTPServer'),
-            Debug => RT->Config->Get('SMTPDebug'),
-        ) } };
-        unless ( $smtp ) {
-            $RT::Logger->crit( "Could not connect to SMTP server.");
-            if ($TicketObj) {
-                _RecordSendEmailFailure( $TicketObj );
-            }
+    } elsif ( $mail_command eq 'mbox' ) {
+        my $now = RT::Date->new(RT->SystemUser);
+        $now->SetToNow;
+
+        state $logfile;
+        unless ($logfile) {
+            my $when = $now->ISO( Timezone => "server" );
+            $when =~ s/\s+/-/g;
+            $logfile = "$RT::VarPath/$when.mbox";
+            $RT::Logger->info("Storing outgoing emails in $logfile");
+        }
+
+        my $fh;
+        unless (open($fh, ">>", $logfile)) {
+            $RT::Logger->crit( "Can't open mbox file $logfile: $!" );
             return 0;
         }
-
-        # duplicate head as we want drop Bcc field
-        my $head = $args{'Entity'}->head->dup;
-        my @recipients = map $_->address, map 
-            Email::Address->parse($head->get($_)), qw(To Cc Bcc);                       
-        $head->delete('Bcc');
-
-        my $sender = RT->Config->Get('SMTPFrom')
-            || $args{'Entity'}->head->get('From');
-        chomp $sender;
-
-        my $status = $smtp->mail( $sender )
-            && $smtp->recipient( @recipients );
-
-        if ( $status ) {
-            $smtp->data;
-            my $fh = $smtp->tied_fh;
-            $head->print( $fh );
-            print $fh "\n";
-            $args{'Entity'}->print_body( $fh );
-            $smtp->dataend;
-        }
-        $smtp->quit;
-
-        unless ( $status ) {
-            $RT::Logger->crit( "$msgid: Could not send mail via SMTP." );
-            if ( $TicketObj ) {
-                _RecordSendEmailFailure( $TicketObj );
-            }
-            return 0;
-        }
-    }
-    else {
+        my $content = $args{Entity}->stringify;
+        $content =~ s/^(>*From )/>$1/mg;
+        print $fh "From $ENV{USER}\@localhost  ".localtime()."\n";
+        print $fh $content, "\n";
+        close $fh;
+    } else {
         local ($ENV{'MAILADDRESS'}, $ENV{'PERL_MAILERS'});
 
         my @mailer_args = ($mail_command);
         if ( $mail_command eq 'sendmail' ) {
             $ENV{'PERL_MAILERS'} = RT->Config->Get('SendmailPath');
-            push @mailer_args, split(/\s+/, RT->Config->Get('SendmailArguments'));
-        }
-        else {
+            push @mailer_args, grep {$_ ne "-t"}
+                split(/\s+/, RT->Config->Get('SendmailArguments'));
+        } elsif ( $mail_command eq 'testfile' ) {
+            unless ($Mail::Mailer::testfile::config{outfile}) {
+                $Mail::Mailer::testfile::config{outfile} = File::Temp->new;
+                $RT::Logger->info("Storing outgoing emails in $Mail::Mailer::testfile::config{outfile}");
+            }
+        } else {
             push @mailer_args, RT->Config->Get('MailParams');
         }
 
@@ -233,6 +214,5 @@ sub SendEmail {
     }
     return 1;
 }
-
 
 1;
