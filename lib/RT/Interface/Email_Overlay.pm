@@ -23,7 +23,7 @@ sub SendEmail {
 
     my $msgid = Encode::decode( "UTF-8", $args{'Entity'}->head->get('Message-ID') || '' );
     chomp $msgid;
-    
+
     # If we don't have any recipients to send to, don't send a message;
     unless ( $args{'Entity'}->head->get('To')
         || $args{'Entity'}->head->get('Cc')
@@ -41,7 +41,18 @@ sub SendEmail {
     if (my $precedence = RT->Config->Get('DefaultMailPrecedence')
         and !$args{'Entity'}->head->get("Precedence")
     ) {
-        $args{'Entity'}->head->replace( 'Precedence', Encode::encode("UTF-8",$precedence) );
+        if ($TicketObj) {
+            my $Overrides = RT->Config->Get('OverrideMailPrecedence') || {};
+            my $Queue = $TicketObj->QueueObj;
+
+            $precedence = $Overrides->{$Queue->id}
+                if exists $Overrides->{$Queue->id};
+            $precedence = $Overrides->{$Queue->Name}
+                if exists $Overrides->{$Queue->Name};
+        }
+
+        $args{'Entity'}->head->replace( 'Precedence', Encode::encode("UTF-8",$precedence) )
+            if $precedence;
     }
 
     if ( $TransactionObj && !$TicketObj
@@ -78,14 +89,6 @@ sub SendEmail {
 
     my $mail_command = RT->Config->Get('MailCommand');
 
-    # RTx::EmailHeader MOD
-    my $sendmailAdd = undef;
-    if (RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs')) {
-        $sendmailAdd = RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs');
-        $sendmailAdd = RTx::EmailHeader::rewriteString($sendmailAdd, $TicketObj, $TransactionObj);
-        RT->Logger->info("Adding custom sendmail args: $sendmailAdd");
-    }
-
     # if it is a sub routine, we just return it;
     return $mail_command->($args{'Entity'}) if UNIVERSAL::isa( $mail_command, 'CODE' );
 
@@ -93,30 +96,12 @@ sub SendEmail {
         my $path = RT->Config->Get('SendmailPath');
         my @args = shellwords(RT->Config->Get('SendmailArguments'));
         push @args, "-t" unless grep {$_ eq "-t"} @args;
-        push @args, $sendmailAdd if ($sendmailAdd);
 
         # SetOutgoingMailFrom and bounces conflict, since they both want -f
         if ( $args{'Bounce'} ) {
             push @args, shellwords(RT->Config->Get('SendmailBounceArguments'));
-        } elsif ( my $MailFrom = RT->Config->Get('SetOutgoingMailFrom') ) {
-            my $OutgoingMailAddress = $MailFrom =~ /\@/ ? $MailFrom : undef;
-            my $Overrides = RT->Config->Get('OverrideOutgoingMailFrom') || {};
-
-            if ($TicketObj) {
-                my $Queue = $TicketObj->QueueObj;
-                my $QueueAddressOverride = $Overrides->{$Queue->id}
-                    || $Overrides->{$Queue->Name};
-
-                if ($QueueAddressOverride) {
-                    $OutgoingMailAddress = $QueueAddressOverride;
-                } else {
-                    $OutgoingMailAddress ||= $Queue->CorrespondAddress
-                        || RT->Config->Get('CorrespondAddress');
-                }
-            }
-            elsif ($Overrides->{'Default'}) {
-                $OutgoingMailAddress = $Overrides->{'Default'};
-            }
+        } elsif ( RT->Config->Get('SetOutgoingMailFrom') ) {
+            my $OutgoingMailAddress = _OutgoingMailFrom($TicketObj);
 
             push @args, "-f", $OutgoingMailAddress
                 if $OutgoingMailAddress;
@@ -176,7 +161,6 @@ sub SendEmail {
             $logfile = "$RT::VarPath/$when.mbox";
             $RT::Logger->info("Storing outgoing emails in $logfile");
         }
-
         my $fh;
         unless (open($fh, ">>", $logfile)) {
             $RT::Logger->crit( "Can't open mbox file $logfile: $!" );
@@ -184,7 +168,8 @@ sub SendEmail {
         }
         my $content = $args{Entity}->stringify;
         $content =~ s/^(>*From )/>$1/mg;
-        print $fh "From $ENV{USER}\@localhost  ".localtime()."\n";
+        my $user = $ENV{USER} || getpwuid($<);
+        print $fh "From $user\@localhost  ".localtime()."\n";
         print $fh $content, "\n";
         close $fh;
     } else {
