@@ -72,22 +72,76 @@ wrap *RT::Interface::Email::SendEmail,
 
 =head1 NAME
 
-RT::Extension::EmailHeader
+RT-Extension-EmailHeader
 
-=head1 VERSION
+=head1 DESCRIPTION
 
-version 1.0.0
+Sets e.g. the C<Return-Path> MIME header and adjusts the envelope's C<Sender-Address> so that bounces
+do not let RT create new tickets but to update the originating ticket with a comment or reply.
+
+=head1 RT VERSION
+
+Works with RT 4.2
+
+=head1 INSTALLATION
+
+=over
+
+=item C<perl Makefile.PL>
+
+=item C<make>
+
+=item C<make install>
+
+May need root permissions
+
+=item Edit your F</opt/rt4/etc/RT_SiteConfig.pm>
+
+Add this line:
+
+    Plugin('RT::Extension::EmailHeader');
+
+=item Clear your mason cache
+
+    rm -rf /opt/rt4/var/mason_data/obj
+
+=item Restart your webserver
+
+=back
+
+=head1 CONFIGURATION
+
+You can change email headers and substitute them with ticket and/or transaction attributes:
+
+    Set($EmailHeader_AdditionalHeaders, {
+        'Return-Path' => 'rt+__Ticket(id)__@my.rt.domain'
+    });
+
+    Set($EmailHeader_OverwriteSendmailArgs, '-f rt+__Ticket(id)__@my.rt.domain');
+
+You can use the following markers:
+
+    __Ticket__ (Ticket->Id);
+    __Transaction__ (Transaction->Id);
+
+    __Ticket(<attribute>)__
+    __Transaction(<attribute>)__
 
 =head1 AUTHOR
 
-Marius Hein <marius.hein@netways.de>
+NETWAYS GmbH <lt>support@netways.de<gt>
 
-=head1 COPYRIGHT AND LICENSE
+=head1 BUGS
 
-This software is Copyright (c) 2012 by NETWAYS GmbH <info@netways.de>
+All bugs should be reported on L<GitHub|https://github.com/NETWAYS/rt-extension-emailheader>.
+
+=head1 LICENSE AND COPYRIGHT
+
+This software is Copyright (c) 2018 by NETWAYS GmbH
 
 This is free software, licensed under:
-    GPL Version 2, June 1991
+
+  The GNU General Public License, Version 2, June 1991
 
 =cut
 

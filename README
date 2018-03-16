@@ -1,0 +1,58 @@
+NAME
+    RT-Extension-EmailHeader
+
+DESCRIPTION
+    Sets e.g. the Return-Path MIME header and adjusts the envelope's
+    Sender-Address so that bounces do not let RT create new tickets but to
+    update the originating ticket with a comment or reply.
+
+RT VERSION
+    Works with RT 4.2
+
+INSTALLATION
+    perl Makefile.PL
+    make
+    make install
+        May need root permissions
+
+    Edit your /opt/rt4/etc/RT_SiteConfig.pm
+        Add this line:
+
+            Plugin('RT::Extension::EmailHeader');
+
+    Clear your mason cache
+            rm -rf /opt/rt4/var/mason_data/obj
+
+    Restart your webserver
+
+CONFIGURATION
+    You can change email headers and substitute them with ticket and/or
+    transaction attributes:
+
+        Set($EmailHeader_AdditionalHeaders, {
+            'Return-Path' => 'rt+__Ticket(id)__@my.rt.domain'
+        });
+
+        Set($EmailHeader_OverwriteSendmailArgs, '-f rt+__Ticket(id)__@my.rt.domain');
+
+    You can use the following markers:
+
+        __Ticket__ (Ticket->Id);
+        __Transaction__ (Transaction->Id);
+
+        __Ticket(<attribute>)__
+        __Transaction(<attribute>)__
+
+AUTHOR
+    NETWAYS GmbH <lt>support@netways.de<gt>
+
+BUGS
+    All bugs should be reported on GitHub
+    <https://github.com/NETWAYS/rt-extension-emailheader>.
+
+LICENSE AND COPYRIGHT
+    This software is Copyright (c) 2018 by NETWAYS GmbH
+
+    This is free software, licensed under:
+
+      The GNU General Public License, Version 2, June 1991
