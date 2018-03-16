@@ -89,11 +89,11 @@ sub SendEmail {
 
     my $mail_command = RT->Config->Get('MailCommand');
 
-    # RTx::EmailHeader MOD
+    # RT::Extension::EmailHeader MOD
     my $sendmailAdd = undef;
-    if (RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs')) {
-        $sendmailAdd = RT->Config->Get('RTx_EmailHeader_OverwriteSendmailArgs');
-        $sendmailAdd = RTx::EmailHeader::rewriteString($sendmailAdd, $TicketObj, $TransactionObj);
+    if (RT->Config->Get('EmailHeader_OverwriteSendmailArgs')) {
+        $sendmailAdd = RT->Config->Get('EmailHeader_OverwriteSendmailArgs');
+        $sendmailAdd = RT::Extension::EmailHeader::rewriteString($sendmailAdd, $TicketObj, $TransactionObj);
         RT->Logger->info("Adding custom sendmail args: $sendmailAdd");
     }
 
@@ -104,7 +104,7 @@ sub SendEmail {
         my $path = RT->Config->Get('SendmailPath');
         my @args = shellwords(RT->Config->Get('SendmailArguments'));
         push @args, "-t" unless grep {$_ eq "-t"} @args;
-        push @args, $sendmailAdd if ($sendmailAdd);  # RTx::EmailHeader MOD
+        push @args, $sendmailAdd if ($sendmailAdd);  # RT::Extension::EmailHeader MOD
 
         # SetOutgoingMailFrom and bounces conflict, since they both want -f
         if ( $args{'Bounce'} ) {

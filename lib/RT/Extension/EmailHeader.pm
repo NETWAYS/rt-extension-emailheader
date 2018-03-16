@@ -1,4 +1,4 @@
-package RTx::EmailHeader;
+package RT::Extension::EmailHeader;
 
 use strict;
 
@@ -13,7 +13,7 @@ sub rewriteString {
         my $string = shift;
         my $ticket = shift;
         my $transaction = shift;
-        
+
         if (ref($ticket) eq 'RT::Ticket') {
                 $string =~ s/__Ticket__/$ticket->Id/ge;
                 $string =~ s/__Ticket\(([^\)]+)\)__/$ticket->$1/ge;
@@ -22,26 +22,26 @@ sub rewriteString {
                 $string =~ s/__Ticket\(([^\)]+)\)__/0/g;
         }
 
-        if (ref($transaction) eq 'RT::Transaction') {   
+        if (ref($transaction) eq 'RT::Transaction') {
                 $string =~ s/__Transaction__/$transaction->Id/ge;
                 $string =~ s/__Transaction\(([^\)]+)\)__/$transaction->$1/ge;
         } else {
                 $string =~ s/__Transaction__/0/g;
                 $string =~ s/__Transaction\(([^\)]+)\)__/0/g;
         }
-        
+
         return $string;
 }
 
 wrap *RT::Interface::Email::SendEmail,
 	'pre' => sub {
-		
+
 		my $length = scalar(@_);
-		
+
 		$length-- if ($length %2 ne 0);
-		
+
 		my @a = splice(@_, 0, $length);
-		
+
 		my (%args) = (
 	        Entity => undef,
 	        Bounce => 0,
@@ -49,19 +49,19 @@ wrap *RT::Interface::Email::SendEmail,
 	        Transaction => undef,
 	        @a
 	    );
-	    
+
 		if ($args{'Ticket'} && $args{'Ticket'}->Id) {
-			my $header = RT->Config->Get('RTx_EmailHeader_AdditionalHeaders') || {};
+			my $header = RT->Config->Get('EmailHeader_AdditionalHeaders') || {};
 			while(my($header,$value) = each(%{ $header })) {
-				
+
 				$value = rewriteString($value, $args{'Ticket'}, $args{'Transaction'});
-				
+
 				RT->Logger->info("Adding header: $header: $value");
-				
+
 				$args{'Entity'}->head->set($header, $value);
 			}
 		}
-	    
+
 	    my @newargs = %args;
 	    $newargs[-1] = $_[-1];
 	    @_ = @newargs;
@@ -72,7 +72,7 @@ wrap *RT::Interface::Email::SendEmail,
 
 =head1 NAME
 
-RTx::EmailHeader
+RT::Extension::EmailHeader
 
 =head1 VERSION
 

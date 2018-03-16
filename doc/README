@@ -1,11 +1,11 @@
 You can change email header and substitute with
 ticket and/or transaction attributes:
 
-Set($RTx_EmailHeader_AdditionalHeaders, {
+Set($EmailHeader_AdditionalHeaders, {
 	'Return-Path' => 'rt+__Ticket(id)__@my.rt.domain'
 });
 
-Set($RTx_EmailHeader_OverwriteSendmailArgs, '-f rt+__Ticket(id)__@my.rt.domain');
+Set($EmailHeader_OverwriteSendmailArgs, '-f rt+__Ticket(id)__@my.rt.domain');
 
 You can use the following marker:
 
@@ -14,5 +14,3 @@ __Transaction__ (Transaction->Id);
 
 __Ticket(<attribute>)__
 __Transaction(<attribute>)__
-
-
