@@ -28,7 +28,7 @@ You may also send us an email to [support@netways.de](mailto:support@netways.de)
 
 ## Requirements
 
-- RT 4.2
+- RT 4.4.2
 
 ## Installation
 

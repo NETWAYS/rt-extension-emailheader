@@ -81,7 +81,7 @@ do not let RT create new tickets but to update the originating ticket with a com
 
 =head1 RT VERSION
 
-Works with RT 4.2
+Works with RT 4.4.2
 
 =head1 INSTALLATION
 

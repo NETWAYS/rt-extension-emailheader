@@ -7,7 +7,7 @@ DESCRIPTION
     update the originating ticket with a comment or reply.
 
 RT VERSION
-    Works with RT 4.2
+    Works with RT 4.4.2
 
 INSTALLATION
     perl Makefile.PL
