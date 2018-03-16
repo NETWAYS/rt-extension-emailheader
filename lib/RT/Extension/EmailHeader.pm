@@ -1,7 +1,7 @@
 package RT::Extension::EmailHeader;
 
+use 5.010_001;
 use strict;
-
 use version;
 
 our $VERSION="1.0.0";
